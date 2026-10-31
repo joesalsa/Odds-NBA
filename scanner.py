@@ -1,5 +1,5 @@
 import os
-import libsql_experimental as libsql
+import libsql
 import requests
 from datetime import datetime
 from fastapi import FastAPI
@@ -19,7 +19,7 @@ app = FastAPI()
 # CONEXIÓN A TURSO
 # ==========================================
 def get_db():
-    return libsql.connect(database=TURSO_URL, auth_token=TURSO_TOKEN)
+    return libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
 
 def init_db():
     con = get_db()
