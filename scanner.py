@@ -155,7 +155,7 @@ def get_infer_odds():
         return {}
 
 # ==========================================
-# LÓGICA DE ESCANEO (AHORRO EXTREMO)
+# LÓGICA DE ESCANEO (CORREGIDA)
 # ==========================================
 def scan_games():
     games = get_espn_games()
@@ -163,12 +163,21 @@ def scan_games():
     
     partidos_a_guardar = []
     
-    # 1. Primero revisamos ESPN (gratis) para ver si ALGUIEN está en HT o Q3
     for g in games:
         checkpoint = None
-        if "Half" in g["status"] or (g["period"] == 2 and g["clock"] in ["0.0", "0:00"]):
+        
+        # VERIFICACIÓN REAL DE PUNTOS EN EL CUARTO
+        q2_pts = (g["q_h"][1] if len(g["q_h"]) > 1 else 0) + (g["q_a"][1] if len(g["q_a"]) > 1 else 0)
+        q3_pts = (g["q_h"][2] if len(g["q_h"]) > 2 else 0) + (g["q_a"][2] if len(g["q_a"]) > 2 else 0)
+        
+        if "Half" in g["status"]:
             checkpoint = "HT"
-        elif "End of 3rd" in g["status"] or (g["period"] == 3 and g["clock"] in ["0.0", "0:00"]):
+        elif g["period"] == 2 and g["clock"] in ["0.0", "0:00"] and q2_pts > 0:
+            checkpoint = "HT"
+            
+        elif "End of 3rd" in g["status"]:
+            checkpoint = "Q3_END"
+        elif g["period"] == 3 and g["clock"] in ["0.0", "0:00"] and q3_pts > 0:
             checkpoint = "Q3_END"
         
         if not checkpoint:
@@ -179,11 +188,9 @@ def scan_games():
             
         partidos_a_guardar.append((g, checkpoint))
         
-    # 2. SI NO HAY PARTIDOS EN HT O Q3, NOS SALIMOS SIN GASTAR CRÉDITOS
     if not partidos_a_guardar:
         return
         
-    # 3. Si hay partidos, AHORA SÍ gastamos 1 petición a InferSports
     print(f"🔍 Detectados {len(partidos_a_guardar)} partidos en HT/Q3. Consultando InferSports...")
     infer_odds = get_infer_odds()
     
@@ -203,7 +210,7 @@ def scan_games():
             print(f"⚠️ {g['matchup']} en {checkpoint}, pero no hay cuota.")
 
 # ==========================================
-# RUTA WEB (La página para ver los datos)
+# RUTA WEB (Diseño Claro)
 # ==========================================
 @app.get("/", response_class=HTMLResponse)
 def read_root():
@@ -219,18 +226,19 @@ def read_root():
             <title>NBA Scanner - Historial</title>
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <style>
-                body { font-family: -apple-system, system-ui; background-color: #0f172a; color: #e2e8f0; padding: 20px; }
-                table { width: 100%; border-collapse: collapse; margin-top: 20px; background-color: #1e293b; border-radius: 8px; overflow: hidden; }
-                th, td { padding: 12px; border-bottom: 1px solid #334155; text-align: center; font-size: 14px; }
-                th { background-color: #1e293b; color: #94a3b8; text-transform: uppercase; font-size: 12px; }
-                tr:hover { background-color: #334155; }
-                .badge-ht { color: #eab308; font-weight: bold; }
-                .badge-q3 { color: #3b82f6; font-weight: bold; }
+                body { font-family: -apple-system, system-ui, sans-serif; background-color: #f4f6f9; color: #334155; padding: 20px; }
+                h1 { color: #1e293b; }
+                table { width: 100%; border-collapse: collapse; margin-top: 20px; background-color: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+                th, td { padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: center; font-size: 14px; }
+                th { background-color: #f8fafc; color: #64748b; text-transform: uppercase; font-size: 12px; font-weight: 600; }
+                tr:hover { background-color: #f1f5f9; }
+                .badge-ht { color: #ca8a04; background: #fef08a; padding: 4px 8px; border-radius: 4px; font-weight: bold; }
+                .badge-q3 { color: #2563eb; background: #dbeafe; padding: 4px 8px; border-radius: 4px; font-weight: bold; }
             </style>
         </head>
         <body>
             <h1>🏀 NBA Scanner - Historial de Líneas</h1>
-            <p style="color: #94a3b8;">Estos datos están guardados permanentemente en Turso DB.</p>
+            <p style="color: #64748b;">Estos datos están guardados permanentemente en Turso DB.</p>
         """
         
         if not rows:
@@ -246,9 +254,9 @@ def read_root():
             for row in rows:
                 html += "<tr>"
                 for i, item in enumerate(row):
-                    if i == 3: # Columna Checkpoint
+                    if i == 3:
                         css = "badge-ht" if item == "HT" else "badge-q3"
-                        html += f"<td class='{css}'>{item}</td>"
+                        html += f"<td><span class='{css}'>{item}</span></td>"
                     else:
                         html += f"<td>{item}</td>"
                 html += "</tr>"
