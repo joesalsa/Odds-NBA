@@ -2,4 +2,4 @@ fastapi
 uvicorn
 apscheduler
 requests
-libsql-experimental
+libsql
