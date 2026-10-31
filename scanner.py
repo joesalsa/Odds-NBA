@@ -3,11 +3,12 @@ import libsql
 import requests
 from datetime import datetime
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 from apscheduler.schedulers.background import BackgroundScheduler
 import uvicorn
 
 # ==========================================
-# CONFIGURACIÓN (Variables de entorno)
+# CONFIGURACIÓN
 # ==========================================
 TURSO_URL = os.environ.get("TURSO_DATABASE_URL")
 TURSO_TOKEN = os.environ.get("TURSO_AUTH_TOKEN")
@@ -190,7 +191,71 @@ def scan_games():
             print(f"⚠️ {g['matchup']} en {checkpoint}, pero no hay cuota.")
 
 # ==========================================
-# FASTAPI Y SCHEDULER
+# RUTA WEB (La nueva página)
+# ==========================================
+@app.get("/", response_class=HTMLResponse)
+def read_root():
+    try:
+        con = get_db()
+        cursor = con.execute("SELECT * FROM historial ORDER BY id DESC")
+        rows = cursor.fetchall()
+        con.close()
+        
+        html = """
+        <html>
+        <head>
+            <title>NBA Scanner - Historial</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <style>
+                body { font-family: -apple-system, system-ui; background-color: #0f172a; color: #e2e8f0; padding: 20px; }
+                table { width: 100%; border-collapse: collapse; margin-top: 20px; background-color: #1e293b; border-radius: 8px; overflow: hidden; }
+                th, td { padding: 12px; border-bottom: 1px solid #334155; text-align: center; font-size: 14px; }
+                th { background-color: #1e293b; color: #94a3b8; text-transform: uppercase; font-size: 12px; }
+                tr:hover { background-color: #334155; }
+                .badge-ht { color: #eab308; font-weight: bold; }
+                .badge-q3 { color: #3b82f6; font-weight: bold; }
+            </style>
+        </head>
+        <body>
+            <h1>🏀 NBA Scanner - Historial de Líneas</h1>
+            <p style="color: #94a3b8;">Estos datos están guardados permanentemente en Turso DB.</p>
+        """
+        
+        if not rows:
+            html += "<p style='margin-top:30px; font-size:16px;'>⏳ Aún no hay datos guardados. El bot está esperando a que terminen los cuartos...</p>"
+        else:
+            # Obtener nombres de columnas dinámicamente
+            columns = ["ID", "Evento", "Partido", "Checkpoint", "Línea", "Over", "Under", "Q1 Loc", "Q1 Vis", "Q2 Loc", "Q2 Vis", "Q3 Loc", "Q3 Vis", "Total Pts", "Fecha"]
+            
+            html += "<table><tr>"
+            for col in columns:
+                html += f"<th>{col}</th>"
+            html += "</tr>"
+            
+            for row in rows:
+                html += "<tr>"
+                for i, item in enumerate(row):
+                    if i == 3: # Columna Checkpoint
+                        css = "badge-ht" if item == "HT" else "badge-q3"
+                        html += f"<td class='{css}'>{item}</td>"
+                    else:
+                        html += f"<td>{item}</td>"
+                html += "</tr>"
+            html += "</table>"
+            
+        html += "</body></html>"
+        return html
+
+    except Exception as e:
+        return f"<h1>Error al cargar datos</h1><p>{e}</p>"
+
+@app.get("/health")
+@app.head("/health")
+def health_check():
+    return {"status": "ok"}
+
+# ==========================================
+# INICIO
 # ==========================================
 @app.on_event("startup")
 def startup_event():
@@ -199,11 +264,6 @@ def startup_event():
     scheduler.add_job(scan_games, "interval", seconds=60)
     scheduler.start()
     print("🚀 Scanner iniciado y programado cada 60 segundos.")
-
-@app.get("/health")
-@app.head("/health")
-def health_check():
-    return {"status": "ok"}
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
