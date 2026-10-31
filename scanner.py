@@ -155,14 +155,15 @@ def get_infer_odds():
         return {}
 
 # ==========================================
-# LÓGICA DE ESCANEO
+# LÓGICA DE ESCANEO (AHORRO EXTREMO)
 # ==========================================
 def scan_games():
     games = get_espn_games()
     if not games: return
     
-    infer_odds = get_infer_odds()
+    partidos_a_guardar = []
     
+    # 1. Primero revisamos ESPN (gratis) para ver si ALGUIEN está en HT o Q3
     for g in games:
         checkpoint = None
         if "Half" in g["status"] or (g["period"] == 2 and g["clock"] in ["0.0", "0:00"]):
@@ -175,7 +176,18 @@ def scan_games():
             
         if ya_existe(g["id"], checkpoint):
             continue
+            
+        partidos_a_guardar.append((g, checkpoint))
         
+    # 2. SI NO HAY PARTIDOS EN HT O Q3, NOS SALIMOS SIN GASTAR CRÉDITOS
+    if not partidos_a_guardar:
+        return
+        
+    # 3. Si hay partidos, AHORA SÍ gastamos 1 petición a InferSports
+    print(f"🔍 Detectados {len(partidos_a_guardar)} partidos en HT/Q3. Consultando InferSports...")
+    infer_odds = get_infer_odds()
+    
+    for g, checkpoint in partidos_a_guardar:
         team_away = g["matchup"].split(" vs ")[0].split()[-1].lower().rstrip('s')
         team_home = g["matchup"].split(" vs ")[1].split()[-1].lower().rstrip('s')
         
@@ -191,7 +203,7 @@ def scan_games():
             print(f"⚠️ {g['matchup']} en {checkpoint}, pero no hay cuota.")
 
 # ==========================================
-# RUTA WEB (La nueva página)
+# RUTA WEB (La página para ver los datos)
 # ==========================================
 @app.get("/", response_class=HTMLResponse)
 def read_root():
@@ -224,7 +236,6 @@ def read_root():
         if not rows:
             html += "<p style='margin-top:30px; font-size:16px;'>⏳ Aún no hay datos guardados. El bot está esperando a que terminen los cuartos...</p>"
         else:
-            # Obtener nombres de columnas dinámicamente
             columns = ["ID", "Evento", "Partido", "Checkpoint", "Línea", "Over", "Under", "Q1 Loc", "Q1 Vis", "Q2 Loc", "Q2 Vis", "Q3 Loc", "Q3 Vis", "Total Pts", "Fecha"]
             
             html += "<table><tr>"
@@ -263,7 +274,7 @@ def startup_event():
     scheduler = BackgroundScheduler(timezone="UTC")
     scheduler.add_job(scan_games, "interval", seconds=60)
     scheduler.start()
-    print("🚀 Scanner iniciado y programado cada 60 segundos.")
+    print("🚀 Scanner iniciado (Modo Ahorro). Esperando HT o Fin de Q3...")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
