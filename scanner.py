@@ -232,7 +232,12 @@ def scan_games():
 def read_root():
     try:
         con = get_db()
-        cursor = con.execute("SELECT * FROM historial ORDER BY id DESC")
+        cursor = con.execute("""
+    SELECT id, event_id, matchup, checkpoint, line, over, under, 
+           q1_home, q1_away, q2_home, q2_away, q3_home, q3_away, 
+           q4_home, q4_away, total_pts, timestamp 
+    FROM historial ORDER BY id DESC
+""")
         rows = cursor.fetchall()
         con.close()
         
