@@ -36,11 +36,18 @@ def init_db():
             q1_home INTEGER, q1_away INTEGER,
             q2_home INTEGER, q2_away INTEGER,
             q3_home INTEGER, q3_away INTEGER,
+            q4_home INTEGER, q4_away INTEGER,
             total_pts INTEGER,
             timestamp TEXT,
             UNIQUE(event_id, checkpoint)
         )
     """)
+    # Agregar columnas Q4 si la tabla ya existía de antes
+    try: con.execute("ALTER TABLE historial ADD COLUMN q4_home INTEGER")
+    except: pass
+    try: con.execute("ALTER TABLE historial ADD COLUMN q4_away INTEGER")
+    except: pass
+    
     con.commit()
     con.close()
 
@@ -49,14 +56,15 @@ def guardar_en_db(event_id, matchup, checkpoint, ln, q_h, q_a, total):
         con = get_db()
         con.execute("""
             INSERT OR IGNORE INTO historial 
-            (event_id, matchup, checkpoint, line, over, under, q1_home, q1_away, q2_home, q2_away, q3_home, q3_away, total_pts, timestamp) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (event_id, matchup, checkpoint, line, over, under, q1_home, q1_away, q2_home, q2_away, q3_home, q3_away, q4_home, q4_away, total_pts, timestamp) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             event_id, matchup, checkpoint, 
             ln.get("line"), ln.get("over"), ln.get("under"),
             q_h[0] if len(q_h) > 0 else 0, q_a[0] if len(q_a) > 0 else 0,
             q_h[1] if len(q_h) > 1 else 0, q_a[1] if len(q_a) > 1 else 0,
             q_h[2] if len(q_h) > 2 else 0, q_a[2] if len(q_a) > 2 else 0,
+            q_h[3] if len(q_h) > 3 else 0, q_a[3] if len(q_a) > 3 else 0,
             total, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ))
         con.commit()
@@ -94,6 +102,7 @@ def get_espn_games():
                 "id": ev.get("id"),
                 "matchup": f"{away.get('team', {}).get('displayName')} vs {home.get('team', {}).get('displayName')}",
                 "status": st.get("type", {}).get("description", ""),
+                "state": st.get("type", {}).get("state", ""),
                 "period": int(st.get("period", 0) or 0),
                 "clock": st.get("displayClock", "") or "",
                 "q_h": q_h,
@@ -155,7 +164,7 @@ def get_infer_odds():
         return {}
 
 # ==========================================
-# LÓGICA DE ESCANEO (CORREGIDA)
+# LÓGICA DE ESCANEO (HT, Q3_END y FINAL)
 # ==========================================
 def scan_games():
     games = get_espn_games()
@@ -166,19 +175,21 @@ def scan_games():
     for g in games:
         checkpoint = None
         
-        # VERIFICACIÓN REAL DE PUNTOS EN EL CUARTO
-        q2_pts = (g["q_h"][1] if len(g["q_h"]) > 1 else 0) + (g["q_a"][1] if len(g["q_a"]) > 1 else 0)
-        q3_pts = (g["q_h"][2] if len(g["q_h"]) > 2 else 0) + (g["q_a"][2] if len(g["q_a"]) > 2 else 0)
-        
-        if "Half" in g["status"]:
-            checkpoint = "HT"
-        elif g["period"] == 2 and g["clock"] in ["0.0", "0:00"] and q2_pts > 0:
-            checkpoint = "HT"
+        # 1. Detectar si el partido YA TERMINÓ
+        if g["state"] == "post" or "Final" in g["status"]:
+            checkpoint = "FINAL"
+        else:
+            q2_pts = (g["q_h"][1] if len(g["q_h"]) > 1 else 0) + (g["q_a"][1] if len(g["q_a"]) > 1 else 0)
+            q3_pts = (g["q_h"][2] if len(g["q_h"]) > 2 else 0) + (g["q_a"][2] if len(g["q_a"]) > 2 else 0)
             
-        elif "End of 3rd" in g["status"]:
-            checkpoint = "Q3_END"
-        elif g["period"] == 3 and g["clock"] in ["0.0", "0:00"] and q3_pts > 0:
-            checkpoint = "Q3_END"
+            if "Half" in g["status"]:
+                checkpoint = "HT"
+            elif g["period"] == 2 and g["clock"] in ["0.0", "0:00"] and q2_pts > 20:
+                checkpoint = "HT"
+            elif "End of 3rd" in g["status"]:
+                checkpoint = "Q3_END"
+            elif g["period"] == 3 and g["clock"] in ["0.0", "0:00"] and q3_pts > 20:
+                checkpoint = "Q3_END"
         
         if not checkpoint:
             continue
@@ -191,26 +202,31 @@ def scan_games():
     if not partidos_a_guardar:
         return
         
-    print(f"🔍 Detectados {len(partidos_a_guardar)} partidos en HT/Q3. Consultando InferSports...")
+    print(f"🔍 Detectados {len(partidos_a_guardar)} partidos. Consultando InferSports...")
     infer_odds = get_infer_odds()
     
     for g, checkpoint in partidos_a_guardar:
-        team_away = g["matchup"].split(" vs ")[0].split()[-1].lower().rstrip('s')
-        team_home = g["matchup"].split(" vs ")[1].split()[-1].lower().rstrip('s')
-        
-        ln = None
-        for key, odds in infer_odds.items():
-            if team_away in key and team_home in key:
-                ln = odds
-                break
-        
-        if ln:
-            guardar_en_db(g["id"], g["matchup"], checkpoint, ln, g["q_h"], g["q_a"], g["total"])
+        # Si el partido es FINAL, no necesitamos cuota porque ya terminó
+        if checkpoint == "FINAL":
+            ln = {"line": None, "over": None, "under": None}
         else:
-            print(f"⚠️ {g['matchup']} en {checkpoint}, pero no hay cuota.")
+            team_away = g["matchup"].split(" vs ")[0].split()[-1].lower().rstrip('s')
+            team_home = g["matchup"].split(" vs ")[1].split()[-1].lower().rstrip('s')
+            
+            ln = None
+            for key, odds in infer_odds.items():
+                if team_away in key and team_home in key:
+                    ln = odds
+                    break
+            
+            if not ln:
+                print(f"⚠️ {g['matchup']} en {checkpoint}, pero no hay cuota.")
+                continue
+        
+        guardar_en_db(g["id"], g["matchup"], checkpoint, ln, g["q_h"], g["q_a"], g["total"])
 
 # ==========================================
-# RUTA WEB (Diseño Claro)
+# RUTA WEB (Diseño Claro con Q4)
 # ==========================================
 @app.get("/", response_class=HTMLResponse)
 def read_root():
@@ -234,17 +250,19 @@ def read_root():
                 tr:hover { background-color: #f1f5f9; }
                 .badge-ht { color: #ca8a04; background: #fef08a; padding: 4px 8px; border-radius: 4px; font-weight: bold; }
                 .badge-q3 { color: #2563eb; background: #dbeafe; padding: 4px 8px; border-radius: 4px; font-weight: bold; }
+                .badge-final { color: #16a34a; background: #dcfce7; padding: 4px 8px; border-radius: 4px; font-weight: bold; }
             </style>
         </head>
         <body>
             <h1>🏀 NBA Scanner - Historial de Líneas</h1>
-            <p style="color: #64748b;">Estos datos están guardados permanentemente en Turso DB.</p>
+            <p style="color: #64748b;">Datos guardados en Turso DB (HT, Q3_END y FINAL).</p>
         """
         
         if not rows:
             html += "<p style='margin-top:30px; font-size:16px;'>⏳ Aún no hay datos guardados. El bot está esperando a que terminen los cuartos...</p>"
         else:
-            columns = ["ID", "Evento", "Partido", "Checkpoint", "Línea", "Over", "Under", "Q1 Loc", "Q1 Vis", "Q2 Loc", "Q2 Vis", "Q3 Loc", "Q3 Vis", "Total Pts", "Fecha"]
+            # Columnas actualizadas con Q4
+            columns = ["ID", "Evento", "Partido", "Checkpoint", "Línea", "Over", "Under", "Q1 Loc", "Q1 Vis", "Q2 Loc", "Q2 Vis", "Q3 Loc", "Q3 Vis", "Q4 Loc", "Q4 Vis", "Total Pts", "Fecha"]
             
             html += "<table><tr>"
             for col in columns:
@@ -254,11 +272,13 @@ def read_root():
             for row in rows:
                 html += "<tr>"
                 for i, item in enumerate(row):
-                    if i == 3:
-                        css = "badge-ht" if item == "HT" else "badge-q3"
+                    if i == 3: # Columna Checkpoint
+                        if item == "HT": css = "badge-ht"
+                        elif item == "Q3_END": css = "badge-q3"
+                        else: css = "badge-final"
                         html += f"<td><span class='{css}'>{item}</span></td>"
                     else:
-                        html += f"<td>{item}</td>"
+                        html += f"<td>{item if item is not None else '-'}</td>"
                 html += "</tr>"
             html += "</table>"
             
@@ -282,7 +302,7 @@ def startup_event():
     scheduler = BackgroundScheduler(timezone="UTC")
     scheduler.add_job(scan_games, "interval", seconds=60)
     scheduler.start()
-    print("🚀 Scanner iniciado (Modo Ahorro). Esperando HT o Fin de Q3...")
+    print("🚀 Scanner iniciado. Guardando HT, Q3_END y FINAL...")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
